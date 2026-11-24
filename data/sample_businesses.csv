@@ -1,0 +1,9 @@
+name,sector,subsector,city,website,phone,rc_number
+Harbourview Specialist Hospital Ltd,health,hospital,Lagos,https://harbourview-hospital.example,,
+Kanem Diagnostics,health,diagnostic_lab,Abuja,https://kanem-diagnostics.example,,
+Brightseed Fertility Centre,health,fertility_clinic,Lagos,https://brightseed-fertility.example,,
+Zuma Microfinance Bank Ltd,finance,microfinance_bank,Abuja,https://zuma-mfb.example,,RC 1234567
+Swiftpurse Technologies Ltd,finance,fintech,Lagos,https://swiftpurse.example,,
+Lagoon Shield Insurance Plc,insurance,insurer,Lagos,https://lagoonshield.example,,
+Wellguard HMO Limited,insurance,hmo,Abuja,https://wellguard-hmo.example,,
+Iroko Pharmacy,health,pharmacy,Lagos,,0803 555 0101,

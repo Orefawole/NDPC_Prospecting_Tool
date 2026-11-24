@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+data/prospects.db
+data/exports/
+.pytest_cache/
