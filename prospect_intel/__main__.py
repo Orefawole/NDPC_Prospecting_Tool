@@ -15,10 +15,15 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="create database tables")
 
-    d = sub.add_parser("discover", help="find businesses with Google Places")
+    d = sub.add_parser("discover", help="find businesses (OpenStreetMap by default, or Google Places)")
+    d.add_argument("--source", choices=["osm", "google"], default=None,
+                   help="osm needs no key (default unless GOOGLE_PLACES_API_KEY is set)")
     d.add_argument("--sectors", nargs="*", default=list(settings.sectors))
-    d.add_argument("--cities", nargs="*", default=list(settings.cities))
-    d.add_argument("--pages", type=int, default=1, help="result pages (20 each) per query")
+    d.add_argument("--cities", nargs="*", default=None,
+                   help="osm: state names or 'all' (default: all of Nigeria). google: cities (default Lagos Abuja)")
+    d.add_argument("--pages", type=int, default=1, help="Google only: result pages (20 each) per query")
+    d.add_argument("--include-no-website", action="store_true",
+                   help="osm only: also keep entries without a website (they cannot be crawled)")
 
     ib = sub.add_parser("import-businesses", help="add businesses from a CSV")
     ib.add_argument("csv")
@@ -51,18 +56,34 @@ def main(argv=None):
         if a.cmd == "init":
             print(f"Database ready at {settings.database_url}")
         elif a.cmd == "discover":
-            from .sources import places
-
-            found = places.discover(a.sectors, a.cities, a.pages)
+            source = a.source or ("google" if settings.google_places_api_key else "osm")
             new = 0
-            for pr in found:
-                _, created = pipeline.add_business(
-                    s, name=pr.name, sector=pr.sector, subsector=pr.subsector, city=pr.city,
-                    address=pr.address, website=pr.website, phone=pr.phone, source="google_places",
-                    source_ref=pr.place_id, review_count=pr.review_count,
-                )
-                new += created
-            db.audit(s, "discover", f"google_places: {len(found)} results, {new} new")
+            if source == "google":
+                from .sources import places
+
+                found = places.discover(a.sectors, a.cities or list(settings.cities), a.pages)
+                for pr in found:
+                    _, created = pipeline.add_business(
+                        s, name=pr.name, sector=pr.sector, subsector=pr.subsector, city=pr.city,
+                        address=pr.address, website=pr.website, phone=pr.phone, source="google_places",
+                        source_ref=pr.place_id, review_count=pr.review_count,
+                    )
+                    new += created
+            else:
+                from .sources import osm
+
+                states = osm.resolve_states(a.cities)
+                print(f"Querying OpenStreetMap for {len(states)} state(s) x {len(a.sectors)} sector(s). "
+                      "All of Nigeria takes roughly 20-40 minutes.")
+                found = osm.discover(a.sectors, states, website_only=not a.include_no_website, progress=print)
+                for r in found:
+                    _, created = pipeline.add_business(
+                        s, name=r.name, sector=r.sector, subsector=r.subsector, city=r.city,
+                        address=r.address, website=r.website, phone=r.phone, source="openstreetmap",
+                        source_ref=r.osm_id,
+                    )
+                    new += created
+            db.audit(s, "discover", f"{source}: {len(found)} results, {new} new")
             s.commit()
             print(f"{len(found)} results, {new} new businesses")
         elif a.cmd == "import-businesses":

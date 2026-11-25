@@ -63,7 +63,7 @@ class PlaceResult:
 def search(query: str, city: str, sector: str, subsector: str, max_pages: int = 3,
            client: httpx.Client | None = None) -> list[PlaceResult]:
     if not settings.google_places_api_key:
-        raise RuntimeError("GOOGLE_PLACES_API_KEY is not set")
+        raise RuntimeError("GOOGLE_PLACES_API_KEY is not set. Use: discover --source osm, or import-businesses your.csv")
     client = client or httpx.Client(timeout=30)
     headers = {
         "X-Goog-Api-Key": settings.google_places_api_key,
