@@ -20,10 +20,16 @@ import httpx
 from ..config import settings
 from ..util import domain_of, normalize_name
 
+# Public Overpass servers, tried in turn. Any of them can be busy (502/504/429)
+# at a given moment, so a failed query moves to the next one and, after a full
+# round, waits and tries again.
 ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
+ROUND_WAITS = [0, 20, 60]  # seconds to wait before each full round of servers
 
 # ISO 3166-2 codes for all 36 states and the FCT. Querying state by state
 # keeps each Overpass request small enough to finish on the public servers.
@@ -74,11 +80,11 @@ SECTOR_FILTERS = {
         '["amenity"="bank"]',
         '["office"="financial"]',
         '["office"="financial_advisor"]',
-        '["office"="company"]["name"~"microfinance|mfb|fintech|pay|capital|finance|asset management",i]',
+        '["office"]["name"~"microfinance|mfb|fintech|payment|capital|finance|asset management",i]',
     ],
     "insurance": [
         '["office"="insurance"]',
-        '["name"~"insurance|assurance|HMO|health maintenance",i]["amenity"!~"hospital|clinic"]',
+        '["office"]["name"~"insurance|assurance|HMO|health maintenance",i]',
     ],
 }
 
@@ -177,44 +183,77 @@ def collapse_branches(results: list[OsmResult]) -> list[OsmResult]:
     return list(seen.values())
 
 
-def fetch(query: str, client: httpx.Client) -> dict:
-    last = None
-    for url in ENDPOINTS:
-        try:
-            r = client.post(url, data={"data": query})
+class OverpassError(RuntimeError):
+    pass
+
+
+def fetch(query: str, client: httpx.Client, endpoints=None, waits=None, log=None) -> dict:
+    endpoints = endpoints or ENDPOINTS
+    waits = ROUND_WAITS if waits is None else waits
+    errors = []
+    for rnd, wait in enumerate(waits, 1):
+        if wait:
+            if log:
+                log(f"  all servers busy, waiting {wait}s before retry {rnd}/{len(waits)}")
+            time.sleep(wait)
+        for url in endpoints:
+            host = url.split("/")[2]
+            try:
+                r = client.post(url, data={"data": query})
+            except httpx.HTTPError as e:
+                errors.append(f"{host}: {type(e).__name__}")
+                continue
             if r.status_code == 200:
-                return r.json()
-            last = f"{url} returned {r.status_code}"
-        except httpx.HTTPError as e:
-            last = f"{url}: {e}"
-        time.sleep(5)
-    raise RuntimeError(f"Overpass query failed ({last}). Try again in a few minutes.")
+                try:
+                    data = r.json()
+                except ValueError:
+                    errors.append(f"{host}: invalid JSON")
+                    continue
+                remark = data.get("remark", "")
+                if "runtime error" in remark or "timed out" in remark:
+                    errors.append(f"{host}: {remark[:80]}")
+                    continue
+                return data
+            errors.append(f"{host}: HTTP {r.status_code}")
+            if log:
+                log(f"  {host} returned {r.status_code}, trying next server")
+    raise OverpassError("; ".join(errors[-4:]))
 
 
-def discover(sectors=None, cities=None, website_only: bool = True,
-             client: httpx.Client | None = None, pause: float = 5, progress=None) -> list[OsmResult]:
-    """cities: state names (or big-city aliases); None or ["all"] covers all of Nigeria.
-    Each result's `city` field holds the state name."""
+def discover_batches(sectors=None, cities=None, website_only: bool = True,
+                     client: httpx.Client | None = None, pause: float = 5, progress=None,
+                     endpoints=None, waits=None):
+    """Yield (state, sector, results, error) one batch at a time so callers can
+    save as they go. cities: state names (or big-city aliases); None or ["all"]
+    covers all of Nigeria. Each result's `city` field holds the state name."""
     sectors = sectors or settings.sectors
     states = resolve_states(cities)
     own = client is None
-    client = client or httpx.Client(timeout=180, headers={"User-Agent": settings.user_agent})
-    results: list[OsmResult] = []
+    client = client or httpx.Client(timeout=200, headers={"User-Agent": settings.user_agent})
     try:
         for i, state in enumerate(states, 1):
             for sector in sectors:
                 if progress:
                     progress(f"[{i}/{len(states)}] {state}: {sector}")
                 try:
-                    results.extend(parse(fetch(build_query(sector, STATE_AREAS[state]), client), sector, state))
-                except RuntimeError as e:  # skip one failed query, keep the rest of the run
-                    if progress:
-                        progress(f"  skipped: {e}")
+                    data = fetch(build_query(sector, STATE_AREAS[state]), client, endpoints, waits, progress)
+                except OverpassError as e:
+                    yield state, sector, [], str(e)
+                else:
+                    batch = collapse_branches(parse(data, sector, state))
+                    if website_only:
+                        batch = [r for r in batch if r.website]
+                    yield state, sector, batch, None
                 time.sleep(pause)
     finally:
         if own:
             client.close()
-    results = collapse_branches(results)
-    if website_only:
-        results = [r for r in results if r.website]
-    return results
+
+
+def discover(sectors=None, cities=None, website_only: bool = True,
+             client: httpx.Client | None = None, pause: float = 5, progress=None,
+             endpoints=None, waits=None) -> list[OsmResult]:
+    out: list[OsmResult] = []
+    for _, _, batch, _ in discover_batches(sectors, cities, website_only, client, pause, progress, endpoints, waits):
+        out.extend(batch)
+    return collapse_branches(out)

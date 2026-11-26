@@ -74,15 +74,32 @@ def main(argv=None):
 
                 states = osm.resolve_states(a.cities)
                 print(f"Querying OpenStreetMap for {len(states)} state(s) x {len(a.sectors)} sector(s). "
-                      "All of Nigeria takes roughly 20-40 minutes.")
-                found = osm.discover(a.sectors, states, website_only=not a.include_no_website, progress=print)
-                for r in found:
-                    _, created = pipeline.add_business(
-                        s, name=r.name, sector=r.sector, subsector=r.subsector, city=r.city,
-                        address=r.address, website=r.website, phone=r.phone, source="openstreetmap",
-                        source_ref=r.osm_id,
-                    )
-                    new += created
+                      "All of Nigeria takes roughly 20-40 minutes. Results are saved as each step finishes.")
+                found, failed = [], []
+                for state, sector, batch, err in osm.discover_batches(
+                    a.sectors, states, website_only=not a.include_no_website, progress=print
+                ):
+                    if err:
+                        failed.append(f"{state} {sector}")
+                        print(f"  could not get {state} {sector}: {err}")
+                        continue
+                    added = 0
+                    for r in batch:
+                        _, created = pipeline.add_business(
+                            s, name=r.name, sector=r.sector, subsector=r.subsector, city=r.city,
+                            address=r.address, website=r.website, phone=r.phone, source="openstreetmap",
+                            source_ref=r.osm_id,
+                        )
+                        added += created
+                    s.commit()
+                    new += added
+                    found.extend(batch)
+                    print(f"  {len(batch)} with websites, {added} new")
+                if failed:
+                    print("These steps failed because the OpenStreetMap servers were busy. Run each again later:")
+                    for f in failed:
+                        st, sec = f.rsplit(" ", 1)
+                        print(f'  python -m prospect_intel discover --cities "{st}" --sectors {sec}')
             db.audit(s, "discover", f"{source}: {len(found)} results, {new} new")
             s.commit()
             print(f"{len(found)} results, {new} new businesses")

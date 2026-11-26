@@ -41,3 +41,30 @@ def test_resolve_states():
     assert len(osm.resolve_states(None)) == 37
     assert len(osm.resolve_states(["all"])) == 37
     assert osm.resolve_states(["Port Harcourt", "lagos state", "FCT"]) == ["Rivers", "Lagos", "Abuja"]
+
+
+def test_fetch_falls_back_and_retries():
+    calls = []
+
+    def handler(req):
+        calls.append(req.url.host)
+        if req.url.host == "a.example" or len(calls) < 3:
+            return httpx.Response(502)
+        return httpx.Response(200, json=SAMPLE)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    data = osm.fetch("q", client, ["https://a.example/api", "https://b.example/api"], waits=[0, 0])
+    assert data == SAMPLE and calls == ["a.example", "b.example", "a.example", "b.example"]
+
+
+def test_runtime_error_remark_counts_as_failure_and_batches_continue():
+    def handler(req):
+        if b"NG-LA" in req.content or b"NG%22%5D" in req.content and b"NG-LA" in req.content:
+            return httpx.Response(200, json={"elements": [], "remark": "runtime error: Query timed out"})
+        return httpx.Response(200, json=SAMPLE)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    out = list(osm.discover_batches(["finance"], ["Lagos", "Rivers"], client=client, pause=0,
+                                    endpoints=["https://a.example/api"], waits=[0]))
+    assert out[0][3] is not None and out[0][2] == []
+    assert out[1][3] is None and len(out[1][2]) == 2
