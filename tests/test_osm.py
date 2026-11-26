@@ -14,8 +14,10 @@ SAMPLE = {
 
 
 def test_query_mentions_area_and_filters():
-    q = osm.build_query("insurance", "NG-LA")
+    q = osm.build_query("insurance", "Lagos")
     assert '"ISO3166-2"="NG-LA"' in q and '"office"="insurance"' in q
+    assert '"name"~"^Lagos( State)?$",i' in q and "map_to_area" in q
+    assert "Federal Capital Territory" in osm.build_query("health", "Abuja")
 
 
 def test_subsectors():

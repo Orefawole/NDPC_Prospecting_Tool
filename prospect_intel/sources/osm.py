@@ -101,9 +101,33 @@ class OsmResult:
     city: str
 
 
-def build_query(sector: str, iso: str, timeout: int = 120) -> str:
+# Name patterns for the state boundary, used when the ISO code tag is missing
+# on a state's OSM boundary (several Nigerian states are tagged by name only).
+STATE_NAME_PATTERNS = {
+    "Abuja": "^(Federal Capital Territory|FCT|Abuja)",
+    "Nasarawa": "^Nass?arawa",
+}
+
+
+def area_block(state: str) -> str:
+    """Overpass statements that put the state's area in set .a, by ISO code OR by
+    name among Nigeria's admin_level=4 boundaries."""
+    iso = STATE_AREAS[state]
+    pattern = STATE_NAME_PATTERNS.get(state, f"^{state}( State)?$")
+    return (
+        f'area["ISO3166-2"="{iso}"]->.a1;'
+        f'area["ISO3166-1"="NG"]["admin_level"="2"]->.ng;'
+        f'rel(area.ng)["boundary"="administrative"]["admin_level"="4"]["name"~"{pattern}",i];'
+        f'map_to_area->.a2;'
+        f'(.a1;.a2;)->.a;'
+    )
+
+
+def build_query(sector: str, state: str, timeout: int = 180) -> str:
+    if state not in STATE_AREAS:  # allow an ISO code for backwards compatibility
+        state = next(k for k, v in STATE_AREAS.items() if v == state)
     parts = "".join(f"nwr{f}(area.a);" for f in SECTOR_FILTERS[sector])
-    return f'[out:json][timeout:{timeout}];area["ISO3166-2"="{iso}"]->.a;({parts});out tags center;'
+    return f'[out:json][timeout:{timeout}];{area_block(state)}({parts});out tags;'
 
 
 def subsector_for(sector: str, tags: dict) -> str:
@@ -236,13 +260,15 @@ def discover_batches(sectors=None, cities=None, website_only: bool = True,
                 if progress:
                     progress(f"[{i}/{len(states)}] {state}: {sector}")
                 try:
-                    data = fetch(build_query(sector, STATE_AREAS[state]), client, endpoints, waits, progress)
+                    data = fetch(build_query(sector, state), client, endpoints, waits, progress)
                 except OverpassError as e:
                     yield state, sector, [], str(e)
                 else:
-                    batch = collapse_branches(parse(data, sector, state))
-                    if website_only:
-                        batch = [r for r in batch if r.website]
+                    every = collapse_branches(parse(data, sector, state))
+                    batch = [r for r in every if r.website] if website_only else every
+                    if progress:
+                        progress(f"  {len(data.get('elements', []))} places in OpenStreetMap, "
+                                 f"{len(every)} named businesses, {sum(1 for r in every if r.website)} with websites")
                     yield state, sector, batch, None
                 time.sleep(pause)
     finally:

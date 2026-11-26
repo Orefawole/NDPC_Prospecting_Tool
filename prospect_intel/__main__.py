@@ -94,7 +94,7 @@ def main(argv=None):
                     s.commit()
                     new += added
                     found.extend(batch)
-                    print(f"  {len(batch)} with websites, {added} new")
+                    print(f"  saved {added} new")
                 if failed:
                     print("These steps failed because the OpenStreetMap servers were busy. Run each again later:")
                     for f in failed:
