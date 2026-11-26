@@ -50,6 +50,8 @@ python -m prospect_intel export --out data/exports/leads.csv
 streamlit run dashboard/app.py
 ```
 
+See RUNBOOK.md for step-by-step Windows instructions and troubleshooting.
+
 Also: `import-businesses your.csv` (columns `name,sector` plus optional `subsector,city,address,website,phone,rc_number`), `run --refresh`, `run --no-claude`, `run --sector health`.
 
 Set `DATABASE_URL` to a Postgres URL for a hosted deployment (add `psycopg[binary]`).
